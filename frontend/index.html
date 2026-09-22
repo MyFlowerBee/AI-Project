@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RetinaAI - Diabetic Retinopathy Detection (Academic Prototype)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background:#f7f9fb; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:4px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef } = React;
+
+// ---------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------
+const API_BASE = window.RETINA_AI_API_BASE || "http://localhost:8000";
+const DR_CLASSES = ["No DR", "Mild DR", "Moderate DR", "Severe DR", "Proliferative DR"];
+const CLASS_COLORS = {
+  "No DR": "#16a34a",
+  "Mild DR": "#84cc16",
+  "Moderate DR": "#eab308",
+  "Severe DR": "#f97316",
+  "Proliferative DR": "#dc2626",
+};
+
+// ---------------------------------------------------------------------
+// Shared UI bits
+// ---------------------------------------------------------------------
+function Disclaimer({ compact }) {
+  return (
+    <div className={`rounded-xl border border-amber-200 bg-amber-50 text-amber-900 ${compact ? "p-3 text-xs" : "p-4 text-sm"}`}>
+      <strong>Important:</strong> RetinaAI is an academic / research prototype for AI-assisted
+      decision support. It is <strong>not a certified medical device</strong> and must not be
+      used as a standalone diagnosis. Always consult a qualified ophthalmologist.
+    </div>
+  );
+}
+
+function ModeBadge({ mode }) {
+  const isDemo = mode !== "model";
+  return (
+    <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${isDemo ? "bg-blue-100 text-blue-700" : "bg-emerald-100 text-emerald-700"}`}>
+      {isDemo ? "DEMO MODE (simulated results)" : "AI MODEL MODE"}
+    </span>
+  );
+}
+
+function NavBar({ page, setPage, mode, setMode }) {
+  const items = [
+    ["home", "Home"], ["upload", "Analyze"], ["results", "Results"],
+    ["history", "History"], ["about", "About"],
+  ];
+  return (
+    <div className="sticky top-0 z-10 bg-white border-b border-slate-200">
+      <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-2 cursor-pointer" onClick={() => setPage("home")}>
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white font-bold">R</div>
+          <span className="font-bold text-slate-800 text-lg">RetinaAI</span>
+        </div>
+        <div className="flex items-center gap-1 flex-wrap">
+          {items.map(([key, label]) => (
+            <button key={key} onClick={() => setPage(key)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${page === key ? "bg-sky-100 text-sky-700" : "text-slate-600 hover:bg-slate-100"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <ModeBadge mode={mode} />
+          <select value={mode} onChange={e => setMode(e.target.value)}
+            className="text-xs border border-slate-300 rounded-lg px-2 py-1.5 bg-white">
+            <option value="demo">Demo Mode</option>
+            <option value="model">AI Model Mode</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Pages
+// ---------------------------------------------------------------------
+function HomePage({ setPage }) {
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-12">
+      <div className="text-center space-y-4">
+        <div className="inline-block px-3 py-1 rounded-full bg-sky-100 text-sky-700 text-xs font-semibold">
+          Academic / Research Prototype
+        </div>
+        <h1 className="text-4xl font-bold text-slate-900">RetinaAI</h1>
+        <p className="text-lg text-slate-600 max-w-2xl mx-auto">
+          An AI-based clinical decision-support demonstration for Diabetic Retinopathy (DR)
+          screening from retinal fundus images — with explainability and uncertainty flagging built in.
+        </p>
+        <button onClick={() => setPage("upload")}
+          className="mt-4 px-6 py-3 rounded-xl bg-sky-600 text-white font-semibold hover:bg-sky-700 transition shadow-sm">
+          Analyze Retinal Image →
+        </button>
+      </div>
+
+      <div className="grid sm:grid-cols-3 gap-4 mt-12">
+        {[
+          ["🔍", "Explainable AI", "Grad-CAM style heatmaps show what influenced each prediction."],
+          ["⚠️", "Uncertainty-Aware", "Low-confidence predictions are automatically flagged for clinical review."],
+          ["🧑‍⚕️", "Human-in-the-Loop", "Built to support, never replace, a qualified ophthalmologist."],
+        ].map(([icon, title, body]) => (
+          <div key={title} className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="text-2xl mb-2">{icon}</div>
+            <div className="font-semibold text-slate-800">{title}</div>
+            <div className="text-sm text-slate-500 mt-1">{body}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-10"><Disclaimer /></div>
+    </div>
+  );
+}
+
+function UploadPage({ setPage, mode, onResult }) {
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
+  const inputRef = useRef(null);
+
+  const handleFile = (f) => {
+    if (!f) return;
+    setError(null);
+    setFile(f);
+    setPreview(URL.createObjectURL(f));
+  };
+
+  const analyze = async () => {
+    if (!file) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch(`${API_BASE}/predict?mode=${mode}`, { method: "POST", body: formData });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || `Server error (${res.status})`);
+      }
+      const data = await res.json();
+      onResult(data);
+      setPage("results");
+    } catch (e) {
+      setError(e.message || "Something went wrong contacting the backend. Is the FastAPI server running?");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-3xl mx-auto px-4 py-10 space-y-6">
+      <h2 className="text-2xl font-bold text-slate-900">Upload & Analysis</h2>
+
+      <div
+        onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={e => { e.preventDefault(); setDragOver(false); handleFile(e.dataTransfer.files[0]); }}
+        onClick={() => inputRef.current.click()}
+        className={`rounded-2xl border-2 border-dashed p-10 text-center cursor-pointer transition ${dragOver ? "border-sky-500 bg-sky-50" : "border-slate-300 bg-white"}`}>
+        <input ref={inputRef} type="file" accept="image/*" className="hidden"
+          onChange={e => handleFile(e.target.files[0])} />
+        {preview ? (
+          <img src={preview} alt="preview" className="max-h-72 mx-auto rounded-xl shadow-sm" />
+        ) : (
+          <div className="text-slate-500">
+            <div className="text-3xl mb-2">📤</div>
+            <div className="font-medium">Drag & drop a fundus image here</div>
+            <div className="text-sm mt-1">or click to browse (JPEG / PNG, max 15MB)</div>
+          </div>
+        )}
+      </div>
+
+      {error && <div className="rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm p-3">{error}</div>}
+
+      <div className="flex items-center gap-3">
+        <button disabled={!file || loading} onClick={analyze}
+          className="px-5 py-2.5 rounded-xl bg-sky-600 text-white font-semibold disabled:opacity-40 hover:bg-sky-700 transition flex items-center gap-2">
+          {loading && <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>}
+          {loading ? "Analyzing..." : "Analyze Image"}
+        </button>
+        {file && <button onClick={() => { setFile(null); setPreview(null); }} className="text-sm text-slate-500 hover:underline">Clear</button>}
+      </div>
+
+      <Disclaimer compact />
+    </div>
+  );
+}
+
+function ProbabilityChart({ probabilities }) {
+  const max = Math.max(...Object.values(probabilities));
+  return (
+    <div className="space-y-2">
+      {DR_CLASSES.map(cls => {
+        const p = probabilities[cls] ?? 0;
+        return (
+          <div key={cls} className="flex items-center gap-3">
+            <div className="w-32 text-xs text-slate-600 text-right">{cls}</div>
+            <div className="flex-1 h-4 bg-slate-100 rounded-full overflow-hidden">
+              <div className="h-full rounded-full transition-all" style={{ width: `${p * 100}%`, background: CLASS_COLORS[cls] }} />
+            </div>
+            <div className="w-12 text-xs text-slate-500">{(p * 100).toFixed(1)}%</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ResultsPage({ result, setPage }) {
+  if (!result) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-16 text-center text-slate-500">
+        No analysis yet. <button className="text-sky-600 font-medium underline" onClick={() => setPage("upload")}>Upload an image →</button>
+      </div>
+    );
+  }
+
+  const lowConfidence = result.confidence < result.confidence_threshold;
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-10 space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h2 className="text-2xl font-bold text-slate-900">Analysis Results</h2>
+        <ModeBadge mode={result.mode} />
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="bg-white rounded-2xl border border-slate-200 p-4">
+          <div className="text-xs font-semibold text-slate-400 uppercase mb-2">Uploaded Fundus Image</div>
+          <img src={result.original_image} className="rounded-xl w-full object-cover" />
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200 p-4">
+          <div className="text-xs font-semibold text-slate-400 uppercase mb-2">Grad-CAM Explainability</div>
+          {result.gradcam_image ? (
+            <img src={result.gradcam_image} className="rounded-xl w-full object-cover" />
+          ) : (
+            <div className="h-full flex items-center justify-center text-sm text-slate-400 py-16">
+              Grad-CAM unavailable (requires trained model)
+            </div>
+          )}
+          <p className="text-xs text-slate-500 mt-2">{result.gradcam_note}</p>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <div className="text-xs text-slate-400 font-semibold uppercase">Prediction</div>
+            <div className="text-xl font-bold" style={{ color: CLASS_COLORS[result.prediction] }}>{result.prediction}</div>
+          </div>
+          <div>
+            <div className="text-xs text-slate-400 font-semibold uppercase">Confidence</div>
+            <div className="text-xl font-bold text-slate-800">{(result.confidence * 100).toFixed(1)}%</div>
+          </div>
+          <div>
+            <div className="text-xs text-slate-400 font-semibold uppercase">Status</div>
+            <div className={`text-sm font-semibold px-3 py-1 rounded-full inline-block ${lowConfidence ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}>
+              {result.review_status}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div className="text-xs font-semibold text-slate-400 uppercase mb-2">Class Probabilities</div>
+          <ProbabilityChart probabilities={result.class_probabilities} />
+        </div>
+      </div>
+
+      <div className="rounded-xl bg-sky-50 border border-sky-200 text-sky-900 text-sm p-4">
+        Highlighted regions in the Grad-CAM image indicate areas that contributed to the model's
+        prediction. This visualization is for interpretability and does not independently
+        establish a medical diagnosis.
+      </div>
+
+      <Disclaimer />
+    </div>
+  );
+}
+
+function HistoryPage() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/history`)
+      .then(r => { if (!r.ok) throw new Error("Failed to load history"); return r.json(); })
+      .then(d => setItems(d.items))
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 py-10 space-y-4">
+      <h2 className="text-2xl font-bold text-slate-900">Analysis History</h2>
+      {loading && <div className="text-slate-500 text-sm">Loading...</div>}
+      {error && <div className="rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm p-3">{error} — is the backend running at {API_BASE}?</div>}
+      {!loading && !error && items.length === 0 && (
+        <div className="text-slate-500 text-sm">No analyses yet. Run one from the Analyze page.</div>
+      )}
+      {items.length > 0 && (
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+              <tr>
+                <th className="text-left px-4 py-3">Date</th>
+                <th className="text-left px-4 py-3">Prediction</th>
+                <th className="text-left px-4 py-3">Confidence</th>
+                <th className="text-left px-4 py-3">Status</th>
+                <th className="text-left px-4 py-3">Mode</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map(it => (
+                <tr key={it.id} className="border-t border-slate-100">
+                  <td className="px-4 py-3 text-slate-600">{new Date(it.timestamp).toLocaleString()}</td>
+                  <td className="px-4 py-3 font-medium" style={{ color: CLASS_COLORS[it.prediction] }}>{it.prediction}</td>
+                  <td className="px-4 py-3">{(it.confidence * 100).toFixed(1)}%</td>
+                  <td className="px-4 py-3">{it.review_status}</td>
+                  <td className="px-4 py-3 text-slate-400">{it.mode}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Dashboard({ items }) {
+  const total = items.length;
+  const high = items.filter(i => i.confidence >= 0.8).length;
+  const low = total - high;
+  const cards = [
+    ["Total Analyses", total, "bg-sky-50 text-sky-700"],
+    ["High Confidence", high, "bg-emerald-50 text-emerald-700"],
+    ["Low Confidence Cases", low, "bg-amber-50 text-amber-700"],
+  ];
+  return (
+    <div className="grid sm:grid-cols-3 gap-4 mb-8">
+      {cards.map(([label, value, cls]) => (
+        <div key={label} className={`rounded-2xl p-4 ${cls}`}>
+          <div className="text-2xl font-bold">{value}</div>
+          <div className="text-xs font-semibold uppercase opacity-80">{label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AboutPage() {
+  const Section = ({ title, children }) => (
+    <div className="bg-white rounded-2xl border border-slate-200 p-5">
+      <h3 className="font-bold text-slate-800 mb-2">{title}</h3>
+      <div className="text-sm text-slate-600 leading-relaxed space-y-2">{children}</div>
+    </div>
+  );
+  return (
+    <div className="max-w-3xl mx-auto px-4 py-10 space-y-4">
+      <h2 className="text-2xl font-bold text-slate-900">About RetinaAI</h2>
+
+      <Section title="What is Diabetic Retinopathy?">
+        <p>A diabetes-related eye condition that damages blood vessels in the retina and, if
+        left undetected, can lead to vision loss. Regular retinal screening helps catch it early.</p>
+      </Section>
+
+      <Section title="How AI Can Assist">
+        <p>A trained convolutional neural network can flag suspicious retinal images for
+        prioritized human review, potentially helping screening programs scale — always
+        alongside, never instead of, a qualified clinician.</p>
+      </Section>
+
+      <Section title="How This System Works">
+        <p>Upload → preprocessing (resize/normalize) → CNN classification → confidence check →
+        Grad-CAM explainability → dashboard with a clinical-review recommendation.</p>
+      </Section>
+
+      <Section title="Explainable AI">
+        <p>Grad-CAM highlights which image regions most influenced a prediction, making the
+        model's reasoning partially inspectable rather than a black box.</p>
+      </Section>
+
+      <Section title="Limitations">
+        <p>This build ships in <strong>Demo Mode</strong>: no real trained DR model or clinical
+        dataset is included, so predictions are simulated. Model performance depends heavily on
+        training data diversity and quality, and the system has not been clinically validated.</p>
+      </Section>
+
+      <Section title="Privacy & Responsible AI">
+        <p>Only the minimum data needed to demonstrate the workflow is stored (no patient
+        identifiers). AI should support healthcare professionals, not replace them; low-confidence
+        results are always flagged for human review.</p>
+      </Section>
+
+      <Disclaimer />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------
+function App() {
+  const [page, setPage] = useState("home");
+  const [mode, setMode] = useState("demo");
+  const [result, setResult] = useState(null);
+  const [historyItems, setHistoryItems] = useState([]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/history`).then(r => r.ok ? r.json() : { items: [] }).then(d => setHistoryItems(d.items || [])).catch(() => {});
+  }, [page]);
+
+  return (
+    <div className="min-h-screen">
+      <NavBar page={page} setPage={setPage} mode={mode} setMode={setMode} />
+      {page === "home" && <HomePage setPage={setPage} />}
+      {page === "upload" && (
+        <div className="max-w-5xl mx-auto">
+          <div className="px-4 pt-6"><Dashboard items={historyItems} /></div>
+          <UploadPage setPage={setPage} mode={mode} onResult={setResult} />
+        </div>
+      )}
+      {page === "results" && <ResultsPage result={result} setPage={setPage} />}
+      {page === "history" && <HistoryPage />}
+      {page === "about" && <AboutPage />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
